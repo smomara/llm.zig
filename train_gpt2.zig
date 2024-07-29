@@ -17,32 +17,27 @@ fn sample_mult(probabilities: []f32, n: u32, coin: f32) u32 {
 }
 
 pub fn main() !void {
-    const B: u32 = 2;
-    const T: u32 = 32;
+    const B: u32 = 4;
+    const T: u32 = 64;
 
     var allocator = std.heap.page_allocator;
 
-    std.debug.print("Initializing GPT model...\n", .{});
     // Initialize GPT model
     const config = GPT2Config{
-        .max_seq_len = 128,
+        .max_seq_len = 1024,
         .vocab_size = 50257,
         .padded_vocab_size = 50304,
-        .num_layers = 2,
-        .num_heads = 2,
-        .channels = 64,
+        .num_layers = 12,
+        .num_heads = 12,
+        .channels = 768,
     };
     var model = try GPT(config, B, T).init(allocator);
     defer model.deinit(allocator);
-    std.debug.print("GPT model initialized successfully.\n", .{});
 
-    std.debug.print("Initializing Tokenizer...\n", .{});
     // Initialize Tokenizer
     var tokenizer = try Tokenizer.init(allocator, "data/gpt2_tokenizer.bin");
     defer tokenizer.deinit(allocator);
-    std.debug.print("Tokenizer initialized successfully.\n", .{});
 
-    std.debug.print("Initializing DataLoaders...\n", .{});
     // Initialize DataLoaders
     const train_tokens = "data/tiny_shakespeare_train.bin";
     const val_tokens = "data/tiny_shakespeare_val.bin";
@@ -50,12 +45,11 @@ pub fn main() !void {
     defer train_loader.deinit(allocator);
     var val_loader = try DataLoader.init(allocator, val_tokens, B, T);
     defer val_loader.deinit(allocator);
-    std.debug.print("DataLoaders initialized successfully.\n", .{});
 
     std.debug.print("Train dataset num_batches: {}\n", .{train_loader.num_batches});
     std.debug.print("Val dataset num_batches: {}\n", .{val_loader.num_batches});
 
-    const val_num_batches: u32 = 2;
+    const val_num_batches: u32 = 5;
     var rng = std.Random.DefaultPrng.init(1337);
     var gen_tokens = try allocator.alloc(u32, B * T);
     defer allocator.free(gen_tokens);
@@ -63,29 +57,26 @@ pub fn main() !void {
     var timer = try std.time.Timer.start();
     var total_training_time: u64 = 0;
 
-    std.debug.print("Starting training loop...\n", .{});
     for (0..41) |step| {
         // Validation
         if (step % 10 == 0) {
-            std.debug.print("Step {d}: Starting validation...\n", .{step});
             var val_loss: f32 = 0.0;
             val_loader.reset();
-            for (0..val_num_batches) |batch| {
+            for (0..val_num_batches) |_| {
                 try val_loader.next_batch();
                 model.forward(val_loader.inputs, val_loader.targets);
                 val_loss += model.mean_loss;
-                std.debug.print("  Validation batch {d}/{d} complete\n", .{ batch + 1, val_num_batches });
             }
             val_loss /= @as(f32, @floatFromInt(val_num_batches));
-            std.debug.print("Step {d}, Val loss {d:.6}\n", .{ step, val_loss });
+            std.debug.print("val loss {d:.6}\n", .{ step, val_loss });
         }
 
         // Generation
         if (step > 0 and step % 20 == 0) { // and step % 20 == 0) {
-            std.debug.print("Step {d}: Starting generation...\n", .{step});
+            std.debug.print("step {d}: Starting generation...\n", .{step});
             @memset(gen_tokens, 50256); // GPT2_EOT token
-            std.debug.print("Generated text:\n---\n", .{});
-            for (1..32) |t| {
+            std.debug.print("generated text:\n---\n", .{});
+            for (1..64) |t| {
                 model.forward(gen_tokens, null);
                 const probs = model.acts.probs[(t - 1) * model.config.padded_vocab_size ..];
                 const coin = rng.random().float(f32);
@@ -98,7 +89,6 @@ pub fn main() !void {
         }
 
         // Training step
-        std.debug.print("Step {d}: Starting training...\n", .{step});
         timer.reset();
         try train_loader.next_batch();
         model.forward(train_loader.inputs, train_loader.targets);
@@ -108,13 +98,11 @@ pub fn main() !void {
         const time_elapsed_ns = timer.read();
         total_training_time += time_elapsed_ns;
 
-        std.debug.print("Step {d}: train loss {d:.6} (took {d:.2} ms)\n", .{ step, model.mean_loss, @as(f64, @floatFromInt(time_elapsed_ns)) / 1e6 });
+        std.debug.print("step {d}: train loss {d:.6} (took {d:.2} ms)\n", .{ step, model.mean_loss, @as(f64, @floatFromInt(time_elapsed_ns)) / 1e6 });
 
         if (step % 100 == 0 and step > 0) {
             const avg_time_per_step = @as(f64, @floatFromInt(total_training_time)) / @as(f64, @floatFromInt(step)) / 1e6;
-            std.debug.print("Average time per step: {d:.2} ms\n", .{avg_time_per_step});
+            std.debug.print("average time per step: {d:.2} ms\n", .{avg_time_per_step});
         }
     }
-
-    std.debug.print("Training complete.\n", .{});
 }
