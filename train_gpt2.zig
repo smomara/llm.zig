@@ -68,7 +68,7 @@ pub fn main() !void {
                 val_loss += model.mean_loss;
             }
             val_loss /= @as(f32, @floatFromInt(val_num_batches));
-            std.debug.print("val loss {d:.6}\n", .{ step, val_loss });
+            std.debug.print("val loss {d:.6}\n", .{val_loss});
         }
 
         // Generation
