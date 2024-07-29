@@ -1,0 +1,11 @@
+*
+
+!*.zig
+!prep.py
+
+!*/
+
+train_gpt2
+
+!.gitignore
+!README.md
