@@ -64,8 +64,8 @@ pub fn main() !void {
             val_loader.reset();
             for (0..val_num_batches) |_| {
                 try val_loader.next_batch();
-                model.forward(val_loader.inputs, val_loader.targets);
-                val_loss += model.mean_loss;
+                const mean_loss = model.forward(val_loader.inputs, val_loader.targets);
+                val_loss += mean_loss;
             }
             val_loss /= @as(f32, @floatFromInt(val_num_batches));
             std.debug.print("val loss {d:.6}\n", .{val_loss});
@@ -77,7 +77,7 @@ pub fn main() !void {
             @memset(gen_tokens, 50256); // GPT2_EOT token
             std.debug.print("generated text:\n---\n", .{});
             for (1..64) |t| {
-                model.forward(gen_tokens, null);
+                _ = model.forward(gen_tokens, null);
                 const probs = model.acts.probs[(t - 1) * model.config.padded_vocab_size ..];
                 const coin = rng.random().float(f32);
                 const next_token = sample_mult(probs, model.config.vocab_size, coin);
@@ -91,14 +91,14 @@ pub fn main() !void {
         // Training step
         timer.reset();
         try train_loader.next_batch();
-        model.forward(train_loader.inputs, train_loader.targets);
+        const mean_loss = model.forward(train_loader.inputs, train_loader.targets);
         model.zero_grad();
-        model.backward();
+        model.backward(train_loader.inputs, train_loader.targets);
         model.update(1e-4, 0.9, 0.999, 1e-8, 0.0, step + 1);
         const time_elapsed_ns = timer.read();
         total_training_time += time_elapsed_ns;
 
-        std.debug.print("step {d}: train loss {d:.6} (took {d:.2} ms)\n", .{ step, model.mean_loss, @as(f64, @floatFromInt(time_elapsed_ns)) / 1e6 });
+        std.debug.print("step {d}: train loss {d:.6} (took {d:.2} ms)\n", .{ step, mean_loss, @as(f64, @floatFromInt(time_elapsed_ns)) / 1e6 });
 
         if (step % 100 == 0 and step > 0) {
             const avg_time_per_step = @as(f64, @floatFromInt(total_training_time)) / @as(f64, @floatFromInt(step)) / 1e6;
