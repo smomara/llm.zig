@@ -10,8 +10,8 @@
 const std = @import("std");
 const math = std.math;
 
-// const options = @import("options");
-const VectorSize: u32 = 8; // options.vector_size;
+const options = @import("options");
+const VectorSize: u32 = options.vector_size;
 
 const ops = @import("ops.zig");
 
