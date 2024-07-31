@@ -22,14 +22,21 @@ pub fn main() !void {
 
     var allocator = std.heap.page_allocator;
 
+    const maxT = 1024;
+    const V = 50257;
+    const Vp = 50304;
+    const L = 12;
+    const NH = 12;
+    const C = 768;
+
     // Initialize GPT model
     const config = GPT2Config{
-        .max_seq_len = 1024,
-        .vocab_size = 50257,
-        .padded_vocab_size = 50304,
-        .num_layers = 12,
-        .num_heads = 12,
-        .channels = 768,
+        .max_seq_len = maxT,
+        .vocab_size = V,
+        .padded_vocab_size = Vp,
+        .num_layers = L,
+        .num_heads = NH,
+        .channels = C,
     };
     var model = try GPT(config, B, T).init(allocator);
     defer model.deinit(allocator);
@@ -78,9 +85,9 @@ pub fn main() !void {
             std.debug.print("generated text:\n---\n", .{});
             for (1..64) |t| {
                 _ = model.forward(gen_tokens, null);
-                const probs = model.acts.probs[(t - 1) * model.config.padded_vocab_size ..];
+                const probs = model.acts.probs[(t - 1) * Vp ..];
                 const coin = rng.random().float(f32);
-                const next_token = sample_mult(probs, model.config.vocab_size, coin);
+                const next_token = sample_mult(probs, V, coin);
                 gen_tokens[t] = next_token;
                 const token_str = tokenizer.decode(next_token);
                 std.debug.print("{s}", .{token_str});

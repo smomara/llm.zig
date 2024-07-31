@@ -410,7 +410,6 @@ pub fn GPT(comptime config: GPT2Config, comptime B: u32, comptime T: u32) type {
     return struct {
         const Self = @This();
 
-        config: GPT2Config,
         memory: []f32, // heap-allocated memory since too large for stack
         params: ParameterTensorsT, // the weights (parameters) of the model, and their sizes
         grads: ParameterTensorsT, // gradients of the weights
@@ -424,7 +423,6 @@ pub fn GPT(comptime config: GPT2Config, comptime B: u32, comptime T: u32) type {
             errdefer allocator.free(memory);
 
             var self = Self{
-                .config = config,
                 .memory = memory,
                 .params = undefined,
                 .grads = undefined,
