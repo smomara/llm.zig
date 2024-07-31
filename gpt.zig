@@ -539,7 +539,7 @@ pub fn GPT(comptime config: GPT2Config, comptime B: u32, comptime T: u32) type {
 
                 // now do the forward pass
                 ops.layernorm_forward(l_ln1, l_ln1_mean, l_ln1_rstd, residual, l_ln1w, l_ln1b, B, T, C);
-                if (C % VectorSize == 0 and C > VectorSize) {
+                if (C % VectorSize == 0 and C >= VectorSize) {
                     ops.matmul_forward_vec(VectorSize, l_qkv, l_ln1, l_qkvw, l_qkvb, B, T, C, 3 * C);
                     ops.attention_forward(l_atty, l_preatt, l_att, l_qkv, B, T, C, NH);
                     ops.matmul_forward_vec(VectorSize, l_attproj, l_atty, l_attprojw, l_attprojb, B, T, C, C);
@@ -565,7 +565,7 @@ pub fn GPT(comptime config: GPT2Config, comptime B: u32, comptime T: u32) type {
             }
 
             ops.layernorm_forward(self.acts.lnf, self.acts.lnf_mean, self.acts.lnf_rstd, residual, self.params.lnfw, self.params.lnfb, B, T, C);
-            if (C % VectorSize == 0 and C > VectorSize) {
+            if (C % VectorSize == 0 and C >= VectorSize) {
                 ops.matmul_forward_vec(VectorSize, self.acts.logits, self.acts.lnf, self.params.wte, null, B, T, C, Vp);
             } else {
                 ops.matmul_forward_naive(self.acts.logits, self.acts.lnf, self.params.wte, null, B, T, C, Vp);
@@ -603,7 +603,7 @@ pub fn GPT(comptime config: GPT2Config, comptime B: u32, comptime T: u32) type {
             // backward pass: go in the reverse order of the forward pass
             ops.crossentropy_softmax_backward(self.grads_acts.logits, self.grads_acts.losses, self.acts.probs, targets[0..], B, T, V, Vp);
 
-            if (C % VectorSize == 0 and C > VectorSize) {
+            if (C % VectorSize == 0 and C >= VectorSize) {
                 ops.matmul_backward_vec(VectorSize, self.grads_acts.lnf, self.grads.wte, null, self.grads_acts.logits, self.acts.lnf, self.params.wte, B, T, C, Vp);
             } else {
                 ops.matmul_backward_naive(self.grads_acts.lnf, self.grads.wte, null, self.grads_acts.logits, self.acts.lnf, self.params.wte, B, T, C, Vp);
@@ -670,7 +670,7 @@ pub fn GPT(comptime config: GPT2Config, comptime B: u32, comptime T: u32) type {
                 const dl_residual3 = self.grads_acts.residual3[l * B * T * C ..][0 .. B * T * C];
 
                 // backprop this layer
-                if (C % VectorSize == 0 and C > VectorSize) {
+                if (C % VectorSize == 0 and C >= VectorSize) {
                     ops.residual_backward(dl_residual2, dl_fcproj, dl_residual3, B * T * C);
                     ops.matmul_backward_vec(VectorSize, dl_fch_gelu, dl_fcprojw, dl_fcprojb, dl_fcproj, l_fch_gelu, l_fcprojw, B, T, 4 * C, C);
                     ops.gelu_backward(dl_fch, l_fch, dl_fch_gelu, B * T * 4 * C);
