@@ -1,6 +1,10 @@
 const std = @import("std");
 const math = std.math;
 
+const c = @cImport({
+    @cInclude("cblas.h");
+});
+
 pub fn encoder_forward(out: []f32, inp: []const u32, wte: []const f32, wpe: []const f32, B: u32, T: u32, C: u32, V: u32) void {
     std.debug.assert(out.len == B * T * C);
     std.debug.assert(inp.len == B * T);
@@ -109,115 +113,41 @@ pub fn layernorm_backward(dinp: []f32, dweight: []f32, dbias: []f32, dout: []con
     }
 }
 
-pub fn matmul_forward_naive(out: []f32, inp: []const f32, weight: []const f32, bias: ?[]const f32, B: u32, T: u32, C: u32, OC: u32) void {
-    for (0..B) |b| {
-        for (0..T) |t| {
-            const bt = b * T + t;
-            for (0..OC) |o| {
-                var val: f32 = 0.0;
-                for (0..C) |i| {
-                    val += inp[bt * C + i] * weight[o * C + i];
-                }
-                if (bias) |bi| {
-                    val += bi[o];
-                }
-                out[bt * OC + o] = val;
+pub fn matmul_forward(out: []f32, inp: []const f32, weight: []const f32, bias: ?[]const f32, B: u32, T: u32, C: u32, OC: u32) void {
+    const M: c_int = @intCast(B * T);
+    const N: c_int = @intCast(OC);
+    const K: c_int = @intCast(C);
+
+    c.cblas_sgemm(c.CblasRowMajor, c.CblasNoTrans, c.CblasTrans, M, N, K, 1.0, inp.ptr, @intCast(K), weight.ptr, @intCast(K), 0.0, out.ptr, @intCast(N));
+
+    if (bias) |bi| {
+        for (0..@intCast(M)) |m| {
+            for (0..@intCast(N)) |n| {
+                out[m * @as(usize, @intCast(N)) + n] += bi[n];
             }
         }
     }
 }
 
-pub fn matmul_forward_vec(comptime N: u32, out: []f32, inp: []const f32, weight: []const f32, bias: ?[]const f32, B: u32, T: u32, C: u32, OC: u32) void {
-    for (0..B) |b| {
-        for (0..T) |t| {
-            var out_bt = out[b * T * OC + t * OC ..];
-            const inp_bt = inp[b * T * C + t * C ..];
-            for (0..OC) |o| {
-                var sum: f32 = 0.0;
-                for (0..C / N) |i| {
-                    const inp_bt_v: @Vector(N, f32) = inp_bt[i * N ..][0..N].*;
-                    const wrow_v: @Vector(N, f32) = weight[o * C + i * N ..][0..N].*;
-                    const res = @reduce(.Add, inp_bt_v * wrow_v);
-                    sum += res;
-                }
-                out_bt[o] = sum;
-                if (bias) |bi| {
-                    out_bt[o] += bi[o];
-                }
-            }
-        }
-    }
-}
+pub fn matmul_backward(dinp: []f32, dweight: []f32, dbias: ?[]f32, dout: []const f32, inp: []const f32, weight: []const f32, B: u32, T: u32, C: u32, OC: u32) void {
+    const M: c_int = @intCast(B * T);
+    const N: c_int = @intCast(C);
+    const K: c_int = @intCast(OC);
 
-pub fn matmul_backward_vec(comptime N: u32, dinp: []f32, dweight: []f32, dbias: ?[]f32, dout: []const f32, inp: []const f32, weight: []const f32, B: u32, T: u32, C: u32, OC: u32) void {
-    for (0..B) |b| {
-        for (0..T) |t| {
-            const dout_bt = dout[b * T * OC + t * OC ..];
-            var dinp_bt_v: @Vector(N, f32) = undefined;
-            for (0..OC) |o| {
-                for (0..C / N) |i| {
-                    dinp_bt_v = dinp[b * T * C + t * C + i * N ..][0..N].*;
-                    const v_wrow: @Vector(N, f32) = weight[o * C + i * N ..][0..N].*;
-                    const d_t: @Vector(N, f32) = @splat(dout_bt[o]);
-                    const zero: @Vector(N, f32) = @splat(0);
-                    dinp_bt_v += @mulAdd(@Vector(N, f32), v_wrow, d_t, zero);
-                    const tmp: [N]f32 = dinp_bt_v;
-                    @memcpy(dinp[b * T * C + t * C + i * N .. b * T * C + t * C + (i + 1) * N], &tmp);
-                }
-            }
-        }
-    }
-    for (0..OC) |o| {
-        for (0..B) |b| {
-            for (0..T) |t| {
-                const dout_bt = dout[b * T * OC + t * OC ..];
-                for (0..C / N) |i| {
-                    var dv_wrow: @Vector(N, f32) = dweight[o * C + i * N ..][0..N].*;
+    // Compute dinp
+    c.cblas_sgemm(c.CblasRowMajor, c.CblasNoTrans, c.CblasNoTrans, M, N, K, 1.0, dout.ptr, @intCast(K), weight.ptr, @intCast(N), 0.0, dinp.ptr, @intCast(N));
 
-                    const inp_bt_v: @Vector(N, f32) = inp[b * T * C + t * C + i * N ..][0..N].*;
-                    const d_t: @Vector(N, f32) = @splat(dout_bt[o]);
+    // Compute dweight
+    c.cblas_sgemm(c.CblasRowMajor, c.CblasTrans, c.CblasNoTrans, K, N, M, 1.0, dout.ptr, @intCast(K), inp.ptr, @intCast(N), 0.0, dweight.ptr, @intCast(N));
 
-                    dv_wrow += inp_bt_v * d_t;
-                    var tmp: [N]f32 = dv_wrow;
-                    @memcpy(dweight[o * C + i * N .. o * C + (i + 1) * N], &tmp);
-                }
-
-                if (dbias) |dbi| {
-                    dbi[o] += dout_bt[o];
-                }
+    // Compute dbias
+    if (dbias) |dbi| {
+        for (0..@intCast(K)) |k| {
+            var sum: f32 = 0.0;
+            for (0..@intCast(M)) |m| {
+                sum += dout[m * @as(usize, @intCast(K)) + k];
             }
-        }
-    }
-}
-pub fn matmul_backward_naive(dinp: []f32, dweight: []f32, dbias: ?[]f32, dout: []const f32, inp: []const f32, weight: []const f32, B: u32, T: u32, C: u32, OC: u32) void {
-    for (0..B) |b| {
-        for (0..T) |t| {
-            const dout_bt = dout[b * T * OC + t * OC ..];
-            const dinp_bt = dinp[b * T * C + t * C ..];
-            for (0..OC) |o| {
-                const wrow = weight[o * C ..];
-                const d = dout_bt[o];
-                for (0..C) |i| {
-                    dinp_bt[i] += wrow[i] * d;
-                }
-            }
-        }
-    }
-
-    for (0..OC) |o| {
-        for (0..B) |b| {
-            for (0..T) |t| {
-                const dout_bt = dout[b * T * OC + t * OC ..];
-                const inp_bt = inp[b * T * C + t * C ..];
-                const dwrow = dweight[o * C ..];
-                const d = dout_bt[o];
-                if (dbias) |bias| {
-                    bias[o] += d;
-                }
-                for (0..C) |i| {
-                    dwrow[i] += inp_bt[i] * d;
-                }
-            }
+            dbi[k] += sum;
         }
     }
 }
@@ -545,7 +475,7 @@ test "Simple sanity check for all functions" {
         try is_finite(dbias);
     }
 
-    // Test matmul_forward_naive
+    // Test matmul_forward
     {
         const out = try allocator.alloc(f32, B * T * OC);
         defer allocator.free(out);
@@ -558,28 +488,11 @@ test "Simple sanity check for all functions" {
         @memset(inp, 0.1);
         @memset(weight, 0.1);
         @memset(bias, 0.1);
-        matmul_forward_naive(out, inp, weight, bias, B, T, C, OC);
+        matmul_forward(out, inp, weight, bias, B, T, C, OC);
         try is_finite(out);
     }
 
-    // Test matmul_forward_vec
-    {
-        const out = try allocator.alloc(f32, B * T * OC);
-        defer allocator.free(out);
-        const inp = try allocator.alloc(f32, B * T * C);
-        defer allocator.free(inp);
-        const weight = try allocator.alloc(f32, OC * C);
-        defer allocator.free(weight);
-        const bias = try allocator.alloc(f32, OC);
-        defer allocator.free(bias);
-        @memset(inp, 0.1);
-        @memset(weight, 0.1);
-        @memset(bias, 0.1);
-        matmul_forward_vec(4, out, inp, weight, bias, B, T, C, OC);
-        try is_finite(out);
-    }
-
-    // Test matmul_backward_vec
+    // Test matmul_backward
     {
         const dinp = try allocator.alloc(f32, B * T * C);
         defer allocator.free(dinp);
@@ -596,30 +509,7 @@ test "Simple sanity check for all functions" {
         @memset(dout, 0.1);
         @memset(inp, 0.1);
         @memset(weight, 0.1);
-        matmul_backward_vec(4, dinp, dweight, dbias, dout, inp, weight, B, T, C, OC);
-        try is_finite(dinp);
-        try is_finite(dweight);
-        try is_finite(dbias);
-    }
-
-    // Test matmul_backward_naive
-    {
-        const dinp = try allocator.alloc(f32, B * T * C);
-        defer allocator.free(dinp);
-        const dweight = try allocator.alloc(f32, OC * C);
-        defer allocator.free(dweight);
-        const dbias = try allocator.alloc(f32, OC);
-        defer allocator.free(dbias);
-        const dout = try allocator.alloc(f32, B * T * OC);
-        defer allocator.free(dout);
-        const inp = try allocator.alloc(f32, B * T * C);
-        defer allocator.free(inp);
-        const weight = try allocator.alloc(f32, OC * C);
-        defer allocator.free(weight);
-        @memset(dout, 0.1);
-        @memset(inp, 0.1);
-        @memset(weight, 0.1);
-        matmul_backward_naive(dinp, dweight, dbias, dout, inp, weight, B, T, C, OC);
+        matmul_backward(dinp, dweight, dbias, dout, inp, weight, B, T, C, OC);
         try is_finite(dinp);
         try is_finite(dweight);
         try is_finite(dbias);

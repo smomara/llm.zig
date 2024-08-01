@@ -10,9 +10,6 @@
 const std = @import("std");
 const math = std.math;
 
-const options = @import("options");
-const VectorSize: u32 = options.vector_size;
-
 const ops = @import("ops.zig");
 
 fn ParameterTensors(comptime V: u32, comptime C: u32, comptime maxT: u32, comptime L: u32) type {
@@ -478,7 +475,7 @@ pub fn GPT(comptime config: GPT2Config, comptime B: u32, comptime T: u32) type {
             init_zeroes(self.params.lnfb);
 
             std.debug.print("GPT-2 Model:\n", .{});
-            std.debug.print("max_seq_len: {}\n", .{T});
+            std.debug.print("max_seq_len: {}\n", .{maxT});
             std.debug.print("vocab_size: {}\n", .{V});
             std.debug.print("padded_vocab_size: {}\n", .{Vp});
             std.debug.print("num_layers: {}\n", .{L});
@@ -539,37 +536,21 @@ pub fn GPT(comptime config: GPT2Config, comptime B: u32, comptime T: u32) type {
 
                 // now do the forward pass
                 ops.layernorm_forward(l_ln1, l_ln1_mean, l_ln1_rstd, residual, l_ln1w, l_ln1b, B, T, C);
-                if (C % VectorSize == 0 and C >= VectorSize) {
-                    ops.matmul_forward_vec(VectorSize, l_qkv, l_ln1, l_qkvw, l_qkvb, B, T, C, 3 * C);
-                    ops.attention_forward(l_atty, l_preatt, l_att, l_qkv, B, T, C, NH);
-                    ops.matmul_forward_vec(VectorSize, l_attproj, l_atty, l_attprojw, l_attprojb, B, T, C, C);
-                    ops.residual_forward(l_residual2, residual, l_attproj, B * T * C);
-                    ops.layernorm_forward(l_ln2, l_ln2_mean, l_ln2_rstd, l_residual2, l_ln2w, l_ln2b, B, T, C);
-                    ops.matmul_forward_vec(VectorSize, l_fch, l_ln2, l_fcw, l_fcb, B, T, C, 4 * C);
-                    ops.gelu_forward(l_fch_gelu, l_fch, B * T * 4 * C);
-                    ops.matmul_forward_vec(VectorSize, l_fcproj, l_fch_gelu, l_fcprojw, l_fcprojb, B, T, 4 * C, C);
-                    ops.residual_forward(l_residual3, l_residual2, l_fcproj, B * T * C);
-                } else {
-                    ops.matmul_forward_naive(l_qkv, l_ln1, l_qkvw, l_qkvb, B, T, C, 3 * C);
-                    ops.attention_forward(l_atty, l_preatt, l_att, l_qkv, B, T, C, NH);
-                    ops.matmul_forward_naive(l_attproj, l_atty, l_attprojw, l_attprojb, B, T, C, C);
-                    ops.residual_forward(l_residual2, residual, l_attproj, B * T * C);
-                    ops.layernorm_forward(l_ln2, l_ln2_mean, l_ln2_rstd, l_residual2, l_ln2w, l_ln2b, B, T, C);
-                    ops.matmul_forward_naive(l_fch, l_ln2, l_fcw, l_fcb, B, T, C, 4 * C);
-                    ops.gelu_forward(l_fch_gelu, l_fch, B * T * 4 * C);
-                    ops.matmul_forward_naive(l_fcproj, l_fch_gelu, l_fcprojw, l_fcprojb, B, T, 4 * C, C);
-                    ops.residual_forward(l_residual3, l_residual2, l_fcproj, B * T * C);
-                }
+                ops.matmul_forward(l_qkv, l_ln1, l_qkvw, l_qkvb, B, T, C, 3 * C);
+                ops.attention_forward(l_atty, l_preatt, l_att, l_qkv, B, T, C, NH);
+                ops.matmul_forward(l_attproj, l_atty, l_attprojw, l_attprojb, B, T, C, C);
+                ops.residual_forward(l_residual2, residual, l_attproj, B * T * C);
+                ops.layernorm_forward(l_ln2, l_ln2_mean, l_ln2_rstd, l_residual2, l_ln2w, l_ln2b, B, T, C);
+                ops.matmul_forward(l_fch, l_ln2, l_fcw, l_fcb, B, T, C, 4 * C);
+                ops.gelu_forward(l_fch_gelu, l_fch, B * T * 4 * C);
+                ops.matmul_forward(l_fcproj, l_fch_gelu, l_fcprojw, l_fcprojb, B, T, 4 * C, C);
+                ops.residual_forward(l_residual3, l_residual2, l_fcproj, B * T * C);
 
                 residual = l_residual3;
             }
 
             ops.layernorm_forward(self.acts.lnf, self.acts.lnf_mean, self.acts.lnf_rstd, residual, self.params.lnfw, self.params.lnfb, B, T, C);
-            if (C % VectorSize == 0 and C >= VectorSize) {
-                ops.matmul_forward_vec(VectorSize, self.acts.logits, self.acts.lnf, self.params.wte, null, B, T, C, Vp);
-            } else {
-                ops.matmul_forward_naive(self.acts.logits, self.acts.lnf, self.params.wte, null, B, T, C, Vp);
-            }
+            ops.matmul_forward(self.acts.logits, self.acts.lnf, self.params.wte, null, B, T, C, Vp);
             ops.softmax_forward(self.acts.probs, self.acts.logits, B, T, V, Vp);
 
             // also forward the cross-entropy loss function if we have the targets
@@ -602,12 +583,7 @@ pub fn GPT(comptime config: GPT2Config, comptime B: u32, comptime T: u32) type {
 
             // backward pass: go in the reverse order of the forward pass
             ops.crossentropy_softmax_backward(self.grads_acts.logits, self.grads_acts.losses, self.acts.probs, targets[0..], B, T, V, Vp);
-
-            if (C % VectorSize == 0 and C >= VectorSize) {
-                ops.matmul_backward_vec(VectorSize, self.grads_acts.lnf, self.grads.wte, null, self.grads_acts.logits, self.acts.lnf, self.params.wte, B, T, C, Vp);
-            } else {
-                ops.matmul_backward_naive(self.grads_acts.lnf, self.grads.wte, null, self.grads_acts.logits, self.acts.lnf, self.params.wte, B, T, C, Vp);
-            }
+            ops.matmul_backward(self.grads_acts.lnf, self.grads.wte, null, self.grads_acts.logits, self.acts.lnf, self.params.wte, B, T, C, Vp);
 
             const residual = self.acts.residual3[(L - 1) * B * T * C ..][0 .. B * T * C];
             const dresidual = self.grads_acts.residual3[(L - 1) * B * T * C ..][0 .. B * T * C];
@@ -670,29 +646,16 @@ pub fn GPT(comptime config: GPT2Config, comptime B: u32, comptime T: u32) type {
                 const dl_residual3 = self.grads_acts.residual3[l * B * T * C ..][0 .. B * T * C];
 
                 // backprop this layer
-                if (C % VectorSize == 0 and C >= VectorSize) {
-                    ops.residual_backward(dl_residual2, dl_fcproj, dl_residual3, B * T * C);
-                    ops.matmul_backward_vec(VectorSize, dl_fch_gelu, dl_fcprojw, dl_fcprojb, dl_fcproj, l_fch_gelu, l_fcprojw, B, T, 4 * C, C);
-                    ops.gelu_backward(dl_fch, l_fch, dl_fch_gelu, B * T * 4 * C);
-                    ops.matmul_backward_vec(VectorSize, dl_ln2, dl_fcw, dl_fcb, dl_fch, l_ln2, l_fcw, B, T, C, 4 * C);
-                    ops.layernorm_backward(dl_residual2, dl_ln2w, dl_ln2b, dl_ln2, l_residual2, l_ln2w, l_ln2_mean, l_ln2_rstd, B, T, C);
-                    ops.residual_backward(dresidual_l, dl_attproj, dl_residual2, B * T * C);
-                    ops.matmul_backward_vec(VectorSize, dl_atty, dl_attprojw, dl_attprojb, dl_attproj, l_atty, l_attprojw, B, T, C, C);
-                    ops.attention_backward(dl_qkv, dl_preatt, dl_att, dl_atty, l_qkv, l_att, B, T, C, NH);
-                    ops.matmul_backward_vec(VectorSize, dl_ln1, dl_qkvw, dl_qkvb, dl_qkv, l_ln1, l_qkvw, B, T, C, 3 * C);
-                    ops.layernorm_backward(dresidual_l, dl_ln1w, dl_ln1b, dl_ln1, residual_l, l_ln1w, l_ln1_mean, l_ln1_rstd, B, T, C);
-                } else {
-                    ops.residual_backward(dl_residual2, dl_fcproj, dl_residual3, B * T * C);
-                    ops.matmul_backward_naive(dl_fch_gelu, dl_fcprojw, dl_fcprojb, dl_fcproj, l_fch_gelu, l_fcprojw, B, T, 4 * C, C);
-                    ops.gelu_backward(dl_fch, l_fch, dl_fch_gelu, B * T * 4 * C);
-                    ops.matmul_backward_naive(dl_ln2, dl_fcw, dl_fcb, dl_fch, l_ln2, l_fcw, B, T, C, 4 * C);
-                    ops.layernorm_backward(dl_residual2, dl_ln2w, dl_ln2b, dl_ln2, l_residual2, l_ln2w, l_ln2_mean, l_ln2_rstd, B, T, C);
-                    ops.residual_backward(dresidual_l, dl_attproj, dl_residual2, B * T * C);
-                    ops.matmul_backward_naive(dl_atty, dl_attprojw, dl_attprojb, dl_attproj, l_atty, l_attprojw, B, T, C, C);
-                    ops.attention_backward(dl_qkv, dl_preatt, dl_att, dl_atty, l_qkv, l_att, B, T, C, NH);
-                    ops.matmul_backward_naive(dl_ln1, dl_qkvw, dl_qkvb, dl_qkv, l_ln1, l_qkvw, B, T, C, 3 * C);
-                    ops.layernorm_backward(dresidual_l, dl_ln1w, dl_ln1b, dl_ln1, residual_l, l_ln1w, l_ln1_mean, l_ln1_rstd, B, T, C);
-                }
+                ops.residual_backward(dl_residual2, dl_fcproj, dl_residual3, B * T * C);
+                ops.matmul_backward(dl_fch_gelu, dl_fcprojw, dl_fcprojb, dl_fcproj, l_fch_gelu, l_fcprojw, B, T, 4 * C, C);
+                ops.gelu_backward(dl_fch, l_fch, dl_fch_gelu, B * T * 4 * C);
+                ops.matmul_backward(dl_ln2, dl_fcw, dl_fcb, dl_fch, l_ln2, l_fcw, B, T, C, 4 * C);
+                ops.layernorm_backward(dl_residual2, dl_ln2w, dl_ln2b, dl_ln2, l_residual2, l_ln2w, l_ln2_mean, l_ln2_rstd, B, T, C);
+                ops.residual_backward(dresidual_l, dl_attproj, dl_residual2, B * T * C);
+                ops.matmul_backward(dl_atty, dl_attprojw, dl_attprojb, dl_attproj, l_atty, l_attprojw, B, T, C, C);
+                ops.attention_backward(dl_qkv, dl_preatt, dl_att, dl_atty, l_qkv, l_att, B, T, C, NH);
+                ops.matmul_backward(dl_ln1, dl_qkvw, dl_qkvb, dl_qkv, l_ln1, l_qkvw, B, T, C, 3 * C);
+                ops.layernorm_backward(dresidual_l, dl_ln1w, dl_ln1b, dl_ln1, residual_l, l_ln1w, l_ln1_mean, l_ln1_rstd, B, T, C);
             }
 
             ops.encoder_backward(self.grads.wte, self.grads.wpe, self.grads_acts.encoded, inputs, B, T, C);
