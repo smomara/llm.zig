@@ -85,7 +85,7 @@ pub fn main() !void {
             std.debug.print("generated text:\n---\n", .{});
             for (1..64) |t| {
                 _ = model.forward(gen_tokens, null);
-                const probs = model.acts.probs[(t - 1) * Vp ..];
+                const probs = model.acts.probs()[(t - 1) * Vp ..];
                 const coin = rng.random().float(f32);
                 const next_token = sample_mult(probs, V, coin);
                 gen_tokens[t] = next_token;
